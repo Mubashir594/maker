@@ -1,17 +1,21 @@
+
 pipeline {
     agent any
 
     environment {
         DOCKER_CREDENTIALS_ID = 'docker-cred'
-        DOCKER_IMAGE          = 'mubashir594/maker' // Format: username/maker
-        SONAR_SERVER_NAME     = 'sonarqube_env' 
-        SONAR_SCANNER_TOOL    = 'sonar-scanner'     
+        DOCKER_IMAGE          = 'mubashir594/maker'
+
+        SONAR_SERVER_NAME     = 'sonarqube_env'
+        SONAR_SCANNER_TOOL    = 'sonar-scanner'
+
         GIT_CREDENTIALS_ID    = 'github-cred'
         MANIFEST_REPO         = 'https://github.com/Mubashir594/maker.git'
         MANIFEST_BRANCH       = 'main'
     }
 
     stages {
+
         stage('Checkout Source Code') {
             steps {
                 checkout scm
@@ -22,11 +26,14 @@ pipeline {
             steps {
                 script {
                     def scannerHome = tool "${SONAR_SCANNER_TOOL}"
+
                     withSonarQubeEnv("${SONAR_SERVER_NAME}") {
-                        sh "${scannerHome}/bin/sonar-scanner \
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
                             -Dsonar.projectKey=maker-key \
-                            -Dsonar.projectName='maker-project' \
-                            -Dsonar.sources=."
+                            -Dsonar.projectName=maker-project \
+                            -Dsonar.sources=.
+                        """
                     }
                 }
             }
@@ -35,10 +42,15 @@ pipeline {
         stage('Build & Push Docker Image') {
             steps {
                 script {
-                    docker.withRegistry('https://index.docker.io/v1/', "${DOCKER_CREDENTIALS_ID}") {
-                        // Builds and pushes your-dockerhub-username/maker:<BUILD_NUMBER> and :latest
-                        def appImage = docker.image("${DOCKER_IMAGE}:${env.BUILD_NUMBER}")
-                        appImage.build()
+                    docker.withRegistry(
+                        'https://index.docker.io/v1/',
+                        "${DOCKER_CREDENTIALS_ID}"
+                    ) {
+                        def appImage = docker.build(
+                            "${DOCKER_IMAGE}:${env.BUILD_NUMBER}",
+                            '.'
+                        )
+
                         appImage.push()
                         appImage.push('latest')
                     }
@@ -49,13 +61,21 @@ pipeline {
         stage('Update Manifest Repo') {
             steps {
                 dir('manifest-workspace') {
-                    git branch: "${MANIFEST_BRANCH}", credentialsId: "${GIT_CREDENTIALS_ID}", url: "${MANIFEST_REPO}"
+
+                    git branch: "${MANIFEST_BRANCH}",
+                        credentialsId: "${GIT_CREDENTIALS_ID}",
+                        url: "${MANIFEST_REPO}"
 
                     sh """
-                        # Updates the 'maker' container image tag to your-dockerhub-username/maker:<BUILD_NUMBER>
                         sed -i '/name: maker/{n;s|image:.*|image: ${DOCKER_IMAGE}:${env.BUILD_NUMBER}|}' k8s/deployment.yaml
-                        
-                        git -c user.name='Mubashir594' -c user.email='mubumubashir594@gmail.com' commit -am "chore(manifest): update maker image tag to ${env.BUILD_NUMBER} [skip ci]"
+
+                        git config user.name 'Mubashir594'
+                        git config user.email 'mubumubashir594@gmail.com'
+
+                        git add k8s/deployment.yaml
+
+                        git commit -m "chore(manifest): update maker image tag to ${env.BUILD_NUMBER} [skip ci]" || echo "No manifest changes to commit"
+
                         git push origin ${MANIFEST_BRANCH}
                     """
                 }
@@ -65,10 +85,13 @@ pipeline {
 
     post {
         success {
-            echo 'Pipeline executed successfully! Manifest repo updated with new image tag.'
+            echo 'Pipeline executed successfully!'
+            echo "Docker image: ${DOCKER_IMAGE}:${BUILD_NUMBER}"
+            echo 'Manifest repository updated successfully!'
         }
+
         failure {
-            echo 'Pipeline failed. Please review the stage logs above.'
+            echo 'Pipeline failed. Please check the Console Output.'
         }
     }
 }
